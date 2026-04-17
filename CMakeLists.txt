@@ -32,7 +32,25 @@ LIST(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_modules)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 # for libtorch
-set(CMAKE_PREFIX_PATH "${PROJECT_SOURCE_DIR}/thirdparty/pytorch/torch")
+# Use environment variable or default path (supports in-place build without source compilation)
+if(DEFINED ENV{LIBTORCH_PATH})
+    set(CMAKE_PREFIX_PATH "$ENV{LIBTORCH_PATH}")
+elseif(EXISTS "$ENV{HOME}/Sanexis/ALIKED_CPP/external/libtorch")
+    set(CMAKE_PREFIX_PATH "$ENV{HOME}/Sanexis/ALIKED_CPP/external/libtorch")
+elseif(EXISTS "${PROJECT_SOURCE_DIR}/thirdparty/pytorch/torch")
+    set(CMAKE_PREFIX_PATH "${PROJECT_SOURCE_DIR}/thirdparty/pytorch/torch")
+else()
+    message(FATAL_ERROR "libtorch not found. Set LIBTORCH_PATH environment variable or install to thirdparty/pytorch/")
+endif()
+
+# Fix CUDA conflict: explicitly set CUDA paths before finding Torch
+set(CMAKE_CUDA_COMPILER "/usr/local/cuda/bin/nvcc")
+set(CUDAToolkit_ROOT "/usr/local/cuda")
+set(CUDA_TOOLKIT_ROOT_DIR "/usr/local/cuda")
+set(CUDA_INCLUDE_DIRS "/usr/local/cuda/include")
+# Prevent CMake from finding CUDA in /usr/include
+set(CMAKE_CUDA_IGNORE_PATH "/usr/include")
+
 find_package(Torch REQUIRED)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 message("-- Torch Version: " ${Torch_VERSION})
@@ -42,6 +60,10 @@ find_package(OpenCV REQUIRED)
 message("-- OpenCV Version: " ${OpenCV_VERSION})
 find_package(Eigen3 REQUIRED)
 find_package(Pangolin REQUIRED)
+
+# Build thirdparty libraries in-place (add_subdirectory integrates them into main build)
+add_subdirectory(${PROJECT_SOURCE_DIR}/thirdparty/g2o)
+add_subdirectory(${PROJECT_SOURCE_DIR}/thirdparty/DBoW2)
 
 # find_package(realsense2)
 include_directories(
@@ -132,8 +154,8 @@ target_link_libraries(${PROJECT_NAME}
     ${Pangolin_LIBRARIES}
     ${TORCH_LIBRARIES}
 
-    ${PROJECT_SOURCE_DIR}/thirdparty/g2o/lib/libg2o${CMAKE_SHARED_LIBRARY_SUFFIX}
-    ${PROJECT_SOURCE_DIR}/thirdparty/DBoW2/lib/libDBoW2${CMAKE_SHARED_LIBRARY_SUFFIX}
+    g2o
+    DBoW2
     -lboost_serialization
     -lcrypto
 )

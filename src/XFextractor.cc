@@ -267,14 +267,20 @@ namespace ORB_SLAM3
         auto _W1 = x.size(3);
 
         // forward pass
+        std::cout << "[DEBUG] Model forward called" << std::endl;
         auto out = model->forward(x);
         torch::Tensor M1, K1, H1;
         std::tie(M1, K1, H1) = out;
+        std::cout << "[DEBUG] M1 shape: " << M1.sizes() << " range: " << M1.min().item<float>() << " - " << M1.max().item<float>() << std::endl;
+        std::cout << "[DEBUG] K1 shape: " << K1.sizes() << " range: " << K1.min().item<float>() << " - " << K1.max().item<float>() << std::endl;
+        std::cout << "[DEBUG] H1 shape: " << H1.sizes() << " range: " << H1.min().item<float>() << " - " << H1.max().item<float>() << std::endl;
         M1 = torch::nn::functional::normalize(M1, torch::nn::functional::NormalizeFuncOptions().dim(1));
 
         // convert logits to heatmap and extract keypoints
         torch::Tensor K1h = getKptsHeatmap(K1);
+        std::cout << "[DEBUG] K1h range: " << K1h.min().item<float>() << " - " << K1h.max().item<float>() << std::endl;
         torch::Tensor mkpts = NMS(K1h, 0.05, 5);
+        std::cout << "[DEBUG] mkpts after NMS: " << mkpts.sizes() << std::endl;
 
         // compute reliability scores
         auto scores = (nearest->forward(K1h, mkpts, _H1, _W1) * bilinear->forward(H1, mkpts, _H1, _W1)).squeeze(-1);
@@ -305,55 +311,41 @@ namespace ORB_SLAM3
         mkpts = mkpts * scaling_factors;
 
         // Prepare keypoints and descriptors
-        // _keypoints.clear();
-        // _keypoints.reserve(nfeatures);  // Reserve space for keypoints
-        _keypoints = vector<cv::KeyPoint>(nfeatures);
-        Mat desc_mat(cv::Size(64, nfeatures), CV_32F, cv::Scalar(0));  // Initialize descriptor matrix
-
+        // Collect valid keypoints first
+        std::cout << "[DEBUG] scores range: " << scores.min().item<float>() << " - " << scores.max().item<float>() << std::endl;
         auto valid = scores[0] > 0;
+        std::cout << "[DEBUG] valid keypoints: " << valid.sum().item<int>() << std::endl;
         auto valid_keypoints = mkpts[0].index({valid});
         auto valid_scores = scores[0].index({valid});
         auto valid_descriptors = feats[0].index({valid}).to(torch::kCPU);
 
-        // testing
-        int monoIndex = 0, stereoIndex = nfeatures - 1;
-        Mat desc = cv::Mat(nfeatures, 64, CV_32F);
-        for (int i = 0; i < valid_keypoints.size(0); i++) 
+        int num_keypoints = valid_keypoints.size(0);
+        
+        // Resize _keypoints to actual number
+        _keypoints.clear();
+        _keypoints.reserve(num_keypoints);
+        
+        for (int i = 0; i < num_keypoints; i++) 
         {
             float x = valid_keypoints[i][0].item<float>();
             float y = valid_keypoints[i][1].item<float>();
             float score = valid_scores[i].item<float>();
-            KeyPoint keypoint(x, y, 1, -1, score);
-
-            cv::Mat desc_row(cv::Size(64, 1), CV_32F);       
-            std::memcpy(desc_row.data, valid_descriptors[i].data_ptr(), 64 * sizeof(float));     
-
-            if (x >= vLappingArea[0] && x <= vLappingArea[1])
-            {
-                _keypoints.at(stereoIndex) = keypoint;
-                desc_row.copyTo(desc_mat.row(stereoIndex));
-                stereoIndex--;
-            }
-            else
-            {
-                _keypoints.at(monoIndex) = keypoint;
-                desc_row.copyTo(desc_mat.row(monoIndex));
-                monoIndex++;
-            }            
+            _keypoints.emplace_back(x, y, 1, -1, score);
         }
-
-        int num_keypoints = valid_descriptors.size(0);
         
         if (num_keypoints > 0) 
         {   
-            desc_mat.rowRange(cv::Range(0, _keypoints.size())).copyTo(_descriptors);
+            // Create descriptor matrix with correct size
+            cv::Mat desc_mat(num_keypoints, 64, CV_32F);
+            std::memcpy(desc_mat.data, valid_descriptors.data_ptr(), num_keypoints * 64 * sizeof(float));
+            desc_mat.copyTo(_descriptors);
         } 
         else 
         {
             _descriptors.release();
         }
 
-        return monoIndex;
+        return num_keypoints;
         
         // // NO FISHEYE STEREO VERSION
         // for (int i = 0; i < valid_keypoints.size(0); i++) 

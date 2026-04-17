@@ -1,138 +1,126 @@
-# xfeatSLAM
+# XFeat ORB-SLAM3
 
-## Introduction
+基于 [xfeatSLAM](https://github.com/udaysankar01/xfeatSLAM) 的改进版本，使用 XFeat 学习特征替代 ORB 特征。
 
-xfeatSLAM is a Visual SLAM system that integrates the lightweight and efficient [XFeat](https://github.com/verlab/accelerated_features) architecture into the [ORB-SLAM3](https://github.com/UZ-SLAMLab/ORB_SLAM3) pipeline. This project is an experimental combination of ORB-SLAM3 with the XFeat model to create a SLAM system utilizing deep learning-based image descriptors.
+## 功能特性
 
-Typically, models used to obtain deep learning-based local features provide accurate descriptions but are highly resource-intensive. The lightweight nature of XFeat makes it particularly well-suited for environments with limited processing power, such as mobile robots and embedded systems, where real-time performance is critical.
+- **XFeat 特征提取**: 轻量级学习特征，速度快于 SuperPoint
+- **兼容 ORB-SLAM3 架构**: 保持原有跟踪、建图、回环检测流程
+- **LibTorch 推理**: 使用 PyTorch C++ API 进行模型推理
 
-First, the entire XFeat model is implemented in C++ using PyTorch C++ API. I have separated the code for this implementation into [this repo](https://github.com/udaysankar01/xfeat_cpp). This implementation is then integrated into the ORB-SLAM3 pipeline, following an approach similar to that used in [GCNv2 SLAM](https://github.com/jiexiong2016/GCNv2_SLAM).
+## 依赖
 
-![xfeatSLAM in action](doc/xfeatSLAM_compressed.gif)
+- OpenCV >= 3.0
+- Eigen3
+- Pangolin (可视化)
+- LibTorch >= 1.8
+- CMake >= 3.10
+- CUDA (推荐)
 
-## Dependencies
-
-### C++17 Compiler
-
-xfeatSLAM uses libtorch and requires a compiler that supports at least C++17. It has been tested with GCC and G++ compilers v11.4.0.
-
-### PyTorch
-
-xfeatSLAM uses [PyTorch](https://github.com/pytorch/pytorch) C++ API (libtorch) for running the C++ Implementation of XFeat model.
-
-Please avoid using the pre-built version of libtorch as it may cause linking issues ([CXX11 ABI issue](https://github.com/pytorch/pytorch/issues/13541))
-
-### Pangolin
-
-[Pangolin](https://github.com/stevenlovegrove/Pangolin) is used for visualization and UI.
-
-### OpenCV
-
-[OpenCV](http://opencv.org/) is used for image and feature processing.
-
-The version of OpenCV used for testing is v4.5.4.
-
-### Eigen3
-
-[Eigen3](http://eigen.tuxfamily.org/) is requried for matrix operations.
-
-Project was tested using Eigen3 v3.4.0.
-
-### DBoW2, Sophus and g2o (included in _thirdparty_ folder)
-
-The project use modified versions of the [DBoW2](https://github.com/dorian3d/DBoW2) library to perform place recognition, [Sophus](https://github.com/strasdat/Sophus) for Lie groups, and [g2o](https://github.com/RainerKuemmerle/g2o) library to perform non-linear optimizations. All three modified libraries (which are BSD) are included in the _thirdparty_ folder.
-
-## Getting Started
-
-To download xfeatSLAM:
+## 编译
 
 ```bash
-git clone https://github.com/udaysankar01/xfeatSLAM
-cd xfeatSLAM
+cd ~/Sanexis/xfeatSLAM
+mkdir -p build && cd build
+cmake ..
+make -j4
 ```
 
-To install all the necessary packages:
+## 运行
 
 ```bash
-chmod +x project_setup.sh
-./project_setup.sh
+cd ~/Sanexis/xfeatSLAM
+./run_large_fri.sh
 ```
 
-To build the project:
+或完整命令：
 
 ```bash
-mkdir build
-cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-make -j8
+./examples/Monocular/mono_euroc \
+    ./Vocabulary/ORBvoc.txt \
+    ./examples/Monocular/large_Fri.yaml \
+    ~/Sanexis/dataset/large_Fri_offline \
+    ~/Sanexis/dataset/large_Fri_offline/timestamps.txt
 ```
 
-## RGB-D Example
+> **注意**: 需要在有 X display 的环境运行（NoMachine 或本地终端）
 
-To run deep RGB-D SLAM:
+## 已知问题
 
-```bash
-./examples/RGB-D/rgbd_tum Vocabulary/ORBvoc.txt \
-                          examples/RGB-D/TUMX.yaml \
-                          PATH_TO_SEQUENCE_FOLDER \
-                          ASSOCIATIONS_FILE
+### 1. 初始化失败 (Critical)
+
+**现象**: 在铁栅门场景开始时无法初始化，匹配数极低（~27 matches）
+
+**原因**: 初始化阶段仍使用 `ORBmatcher` (NN ratio test)，而非 XFeat 优化的匹配器
+
+**位置**: `src/Tracking.cc:2527`
+
+```cpp
+// 问题代码
+ORBmatcher matcher(0.9,true);
+int nmatches = matcher.SearchForInitialization(...);
 ```
 
-To use ORB feature descriptor instead of XFeat, set the environment variable `USE_ORB` as 1.
+**临时方案**: 
+- 增加关键点数量 (修改 `examples/Monocular/large_Fri.yaml` 中的 `nFeatures`)
+- 降低初始化阈值
 
-```bash
-USE_ORB=1 ./examples/RGB-D/rgbd_tum Vocabulary/ORBvoc.txt \
-                                    examples/RGB-D/TUMX.yaml \
-                                    PATH_TO_SEQUENCE_FOLDER \
-                                    ASSOCIATIONS_FILE
+**推荐解决方案**:
+- 实现 `XFmatcher` 类，支持 XFeat 描述子的正确匹配
+- 参考 SP_SLAM3 的 `SPmatcher::SearchForInitialization` 实现
+
+### 2. 未集成 LightGlue
+
+**现象**: 跟踪阶段使用 NN ratio test 匹配，匹配质量不如 LightGlue
+
+**推荐解决方案**:
+- 集成 LightGlue 匹配器
+- 需要实现 `XFmatcher` 类并加载 LightGlue 模型
+
+### 3. PlaceRecognition 模型缺失
+
+**现象**: 回环检测功能不可用
+
+**解决方案**: 添加预训练的 Place Recognition 模型
+
+## 文件结构
+
+```
+xfeatSLAM/
+├── examples/Monocular/     # 单目示例
+│   ├── mono_euroc.cc       # EuRoC 数据集运行入口
+│   └── large_Fri.yaml      # 相机配置文件
+├── src/
+│   ├── XFeat.cc            # XFeat 模型实现
+│   ├── XFextractor.cc      # 特征提取器
+│   └── Tracking.cc         # 跟踪模块 (需修改初始化)
+├── weights/                # 模型权重目录
+├── Vocabulary/             # 词袋文件
+└── run_large_fri.sh        # 运行脚本
 ```
 
-## Monocular Example
+## 与 vismatch 测试对比
 
-To run deep Monocular SLAM:
+| 测试场景 | XFeat+LightGlue (vismatch) | xfeatSLAM 内部 |
+|---------|---------------------------|----------------|
+| 连续帧匹配 | ~1400 inliers | ~27 matches (初始化) |
+| Skip=50 | ~474 inliers | - |
 
-```bash
-./examples/Monocular/mono_tum Vocabulary/ORBvoc.txt \
-                              examples/Monocular/TUMX.yaml \
-                              PATH_TO_SEQUENCE_FOLDER
-```
+**结论**: XFeat 特征质量足够，但 SLAM 内部匹配器未正确使用。
 
-Support for additional sensors will be added soon.
+## 后续开发计划
 
-## Bibtex Citation
+1. **[High] 修复初始化匹配器** - 使用 XFeat 专用匹配替代 ORBmatcher
+2. **[High] 集成 LightGlue** - 提升跟踪匹配质量
+3. **[Medium] 添加 Place Recognition** - 启用回环检测
+4. **[Low] 优化推理速度** - FP16、TensorRT
 
-```tex
-@misc{potje2024xfeatacceleratedfeatureslightweight,
-      title={XFeat: Accelerated Features for Lightweight Image Matching},
-      author={Guilherme Potje and Felipe Cadar and Andre Araujo and Renato Martins and Erickson R. Nascimento},
-      year={2024},
-      eprint={2404.19174},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2404.19174},
-}
-```
+## 参考
 
-```tex
-@article{ORBSLAM3_TRO,
-  title={{ORB-SLAM3}: An Accurate Open-Source Library for Visual, Visual-Inertial
-           and Multi-Map {SLAM}},
-  author={Campos, Carlos AND Elvira, Richard AND G\´omez, Juan J. AND Montiel,
-          Jos\'e M. M. AND Tard\'os, Juan D.},
-  journal={IEEE Transactions on Robotics},
-  volume={37},
-  number={6},
-  pages={1874-1890},
-  year={2021}
- }
-```
+- 原项目: https://github.com/udaysankar01/xfeatSLAM
+- XFeat 论文: https://arxiv.org/abs/2404.00604
+- ORB-SLAM3: https://github.com/UZ-SLAMLab/ORB_SLAM3
 
-```tex
-@unknown{unknown,
-author = {Tang, Jiexiong and Ericson, Ludvig and Folkesson, John and Jensfelt, Patric},
-year = {2019},
-month = {02},
-pages = {},
-title = {GCNv2: Efficient Correspondence Prediction for Real-Time SLAM}
-}
-```
+## License
+
+See LICENSE.txt
